@@ -1,0 +1,78 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.9~svn20110310	//
+BACKLOG	server_backup.c	20;"	d	file:
+BACKLOG	socket_server.c	14;"	d	file:
+HEADER_FILE_PATH	Makefile	/^HEADER_FILE_PATH="..\/headers"$/;"	m
+PORT	server_backup.c	18;"	d	file:
+RS_conn_fd	socket_client.c	/^int RS_conn_fd;$/;"	v
+allocate_peer_struct	before_pthread_socket_client.c	/^int allocate_peer_struct(peer_info** my_info ){$/;"	f
+allocate_peer_struct	socket_client.c	/^int allocate_peer_struct(peer_info** my_info ){$/;"	f
+allocate_peer_struct	working_socket_client.c	/^int allocate_peer_struct(peer_info** my_info ){$/;"	f
+bundle_all_rfcs	socket_client.c	/^bool bundle_all_rfcs(void *this_rfc_index,unsigned char **respBuff){$/;"	f
+check_and_load_cookie	before_pthread_socket_client.c	/^int check_and_load_cookie(peer_info **my_info){$/;"	f
+check_and_load_cookie	socket_client.c	/^int check_and_load_cookie(peer_info **my_info){$/;"	f
+check_and_load_cookie	working_socket_client.c	/^int check_and_load_cookie(peer_info **my_info){$/;"	f
+create_listen_socket	socket_client.c	/^int create_listen_socket(peer_info **my_info){$/;"	f
+create_local_rfc_index	before_pthread_socket_client.c	/^void create_local_rfc_index(list *my_rfc_index_list){$/;"	f
+create_local_rfc_index	socket_client.c	/^void create_local_rfc_index(list *my_rfc_index_list){$/;"	f
+fetch_rfc_from_peer	socket_client.c	/^void fetch_rfc_from_peer(){$/;"	f
+for_each_new_rfc	socket_client.c	/^void for_each_new_rfc(list *list, listIterator iterator, void* element){$/;"	f
+free_other_peers	socket_client.c	/^void free_other_peers(void *this_peer_info){$/;"	f
+free_rfc_index	before_pthread_socket_client.c	/^void free_rfc_index(void *this_RFC_index){$/;"	f
+free_rfc_index	socket_client.c	/^void free_rfc_index(void *this_RFC_index){$/;"	f
+free_rfc_index	working_socket_client.c	/^void free_rfc_index(void *this_RFC_index){$/;"	f
+get_in_addr	server_backup.c	/^void *get_in_addr(struct sockaddr *sa)$/;"	f
+handle_pquery_response	socket_client.c	/^void handle_pquery_response(){$/;"	f
+handle_tcp_recv	socket_client.c	/^void handle_tcp_recv(){$/;"	f
+keepalive_entry_point	before_pthread_socket_client.c	/^void *keepalive_entry_point( void *arg ){$/;"	f
+list_append	linklist.c	/^void list_append(list *list, void *element)$/;"	f
+list_destroy	linklist.c	/^void list_destroy(list *list)$/;"	f
+list_for_each	linklist.c	/^void list_for_each(list *list, listIterator iterator)$/;"	f
+list_head	linklist.c	/^void list_head(list *list, void *element, bool removeFromList)$/;"	f
+list_new	linklist.c	/^void list_new(list *list, int node_size, freeFunction freeFn)$/;"	f
+list_size	linklist.c	/^int list_size(list *list)$/;"	f
+list_tail	linklist.c	/^void list_tail(list *list, void *element)$/;"	f
+list_traversal	before_pthread_socket_client.c	/^void list_traversal(void *this_RFC_index){$/;"	f
+list_traversal	socket_client.c	/^bool list_traversal(void *this_RFC_index){$/;"	f
+listenfd	socket_client.c	/^int listenfd;$/;"	v
+main	before_pthread_socket_client.c	/^int main(){$/;"	f
+main	server.c	/^int main(int argc, char *argv[])$/;"	f
+main	server_backup.c	/^int main(void)$/;"	f
+main	socket_client.c	/^int main(){$/;"	f
+main	socket_server.c	/^int main(){$/;"	f
+main	working_socket_client.c	/^int main(){$/;"	f
+manage_rs_activity	before_pthread_socket_client.c	/^int manage_rs_activity(peer_info *my_info){$/;"	f
+manage_rs_activity	socket_client.c	/^int manage_rs_activity(peer_info *my_info){$/;"	f
+manage_rs_activity	working_socket_client.c	/^int manage_rs_activity(peer_info *my_info){$/;"	f
+my_info	before_pthread_socket_client.c	/^peer_info *my_info = NULL;$/;"	v
+my_info	socket_client.c	/^peer_info *my_info = NULL;$/;"	v
+my_info	working_socket_client.c	/^peer_info *my_info = NULL;$/;"	v
+other_peers	socket_client.c	/^list other_peers;$/;"	v
+peer_traversal	socket_client.c	/^bool peer_traversal(void *this_peer_info){$/;"	f
+rfc_client_fd	socket_client.c	/^int rfc_client_fd;$/;"	v
+rfc_index_list	socket_client.c	/^list rfc_index_list;$/;"	v
+rfc_server	socket_client.c	/^void *rfc_server(){$/;"	f
+schedule_keepalive	before_pthread_socket_client.c	/^void schedule_keepalive(){$/;"	f
+schedule_keepalive	working_socket_client.c	/^void schedule_keepalive(peer_info *my_info){$/;"	f
+send_packet	before_pthread_socket_client.c	/^int send_packet(peer_info *my_info, char *buffer ){$/;"	f
+send_packet	socket_client.c	/^int send_packet(peer_info *my_info, char *buffer,int flag ){$/;"	f
+send_packet	working_socket_client.c	/^int send_packet(peer_info *my_info, char *buffer ){$/;"	f
+send_rfc_get_query_msg	socket_client.c	/^void send_rfc_get_query_msg(){$/;"	f
+send_rs_keepalive_msg	before_pthread_socket_client.c	/^int send_rs_keepalive_msg(){$/;"	f
+send_rs_keepalive_msg	socket_client.c	/^int send_rs_keepalive_msg(){$/;"	f
+send_rs_keepalive_msg	working_socket_client.c	/^int send_rs_keepalive_msg(){$/;"	f
+send_rs_leave_msg	before_pthread_socket_client.c	/^int send_rs_leave_msg(peer_info *my_info){$/;"	f
+send_rs_leave_msg	socket_client.c	/^int send_rs_leave_msg(peer_info *my_info){$/;"	f
+send_rs_leave_msg	working_socket_client.c	/^int send_rs_leave_msg(peer_info *my_info){$/;"	f
+send_rs_pquery_msg	before_pthread_socket_client.c	/^int send_rs_pquery_msg(peer_info *my_info){$/;"	f
+send_rs_pquery_msg	socket_client.c	/^int send_rs_pquery_msg(peer_info *my_info){$/;"	f
+send_rs_pquery_msg	working_socket_client.c	/^int send_rs_pquery_msg(peer_info *my_info){$/;"	f
+send_rs_register	before_pthread_socket_client.c	/^int send_rs_register(peer_info *my_info){$/;"	f
+send_rs_register	socket_client.c	/^int send_rs_register(peer_info *my_info){$/;"	f
+send_rs_register	working_socket_client.c	/^int send_rs_register(peer_info *my_info){$/;"	f
+sig_handler	socket_client.c	/^void sig_handler(int signo){$/;"	f
+sigchld_handler	server_backup.c	/^void sigchld_handler(int s)$/;"	f

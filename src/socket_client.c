@@ -1,0 +1,1110 @@
+#include<sys/socket.h>
+#include<sys/types.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include<stdio.h>
+#include<sys/types.h>
+#include<sys/stat.h>
+#include<unistd.h>
+#include<string.h>
+#include<netdb.h>
+#include<stdlib.h>
+#include<fcntl.h>
+#include<signal.h>
+#include<pthread.h>
+#include<dirent.h>
+#include<stdint.h>
+// TNRC : Libevent
+#include<event.h>
+#include<sys/time.h>
+
+// Custom header files
+#include "../headers/socket_client.h"
+#include "../headers/common_include.h"
+
+// TNRC: Header file to get linklist related features
+#include "../headers/linklist.h"
+
+peer_info *my_info = NULL;
+list rfc_index_list;
+list other_peers;
+int listenfd;
+int rfc_client_fd;
+int RS_conn_fd;
+char app_header[CHUNK_SIZE]={0};
+//void *keepalive_entry_point( void *arg );
+int manage_rs_activity(peer_info *my_info,int message);
+void sig_handler(int signo){
+	if(signo == SIGINT ){
+		printf("Client is shutting down.. Sending leave message to server\n");
+		manage_rs_activity(my_info,LEAVE_REQUEST);
+		close(RS_conn_fd);
+		close(my_info->rfc_server_fd);
+		exit(0);
+	}
+}
+void send_rfc_get_query_msg();
+void handle_generic_read(){
+	char recv_buff[1024];
+	int recv_bytes = -1;
+	int total_recv_in_packet=0;
+	int n;
+        char splitStrings[100][100]={0};
+	
+
+	int32_t actual_content_length=0,network_content_length=0; 
+	memset(recv_buff,0,sizeof(recv_buff));
+        total_recv_in_packet = 0;
+	char *port_ptr;
+        peer_info new_peer;
+        if((recv_bytes = read(RS_conn_fd, recv_buff, sizeof(recv_buff)-1)) > 0){
+                printf("Got response string : \n%s\n",recv_buff);
+                // parse received data here:
+                char *ptr;
+                ptr = (char *)&recv_buff;
+                printf("Calling Receive Buffer Parser\n");
+                int cnt = split_strings(&ptr, splitStrings);
+                int data_field;
+                char *request, request_temp[100], *temp, temp_value[100];
+                printf("\nStrings (words=%d) after split by space:\n", cnt);
+                for(int i=0; i < cnt; i++)
+                {
+                    if(i==1)  {
+                        printf("Found Request type : %s..next %s\n", splitStrings[0],splitStrings[1]);
+                        request = memcpy(request_temp, splitStrings[i], sizeof(splitStrings[0]));
+                        // strcpy - relies on NULL character to stop the copy
+                        //request = strcpy(temp_value, splitStrings[1]);
+                        printf("Peer Request type = %s\n", request);
+                    }
+                    if(!(strcspn(splitStrings[i], "\r\n")))  {
+                        // check if next char is again \r\n
+                        if(strcmp(splitStrings[i], splitStrings[i+1]) == 0)  {
+                            data_field = i+2;   //index after the last match is crlf
+                            printf("Found two consecutive <cr><lf> <cr><lf> ; end of header\n"  );
+                            printf("Data Field starting index: %d\n", data_field);
+                            printf("And starting data is : %s\n\n", splitStrings[data_field]);
+                        }
+                        continue;
+                    }
+                    if(!(strcmp(splitStrings[i], "hostname:"))) {
+                        memset(&new_peer,0,sizeof(new_peer));
+                        printf("Found Hostname : %s\n", splitStrings[i+1]);
+                        temp = strcpy(temp_value, splitStrings[i+1]);
+                        strncpy(new_peer.hostname, temp,sizeof(new_peer.hostname));
+                        printf("new_peer.hostname = %s\n", new_peer.hostname);
+                    }
+                    if(!(strcmp(splitStrings[i], "server_port:")))  {
+                        //printf("Found peer server port  : %s\n", splitStrings[i+1]);
+                        strncpy(new_peer.listen_port , splitStrings[i+1],sizeof(new_peer.listen_port));
+                        printf("new_peer.server_port = %s\n", new_peer.listen_port);
+                        list_append(&other_peers,(void *)&new_peer);
+                    }
+                    if(!(strcmp(splitStrings[i], "cookie:")))  {
+			my_info->cookie=atoi(splitStrings[i+1]);
+			printf("Req : %s and len %d\n",request,(int)strlen(request));
+			if(!(strcmp(request,"REGISTER_RESPONSE"))){
+				int file_fd;
+				printf("I got cookie :%s and %d\n",splitStrings[i+1],atoi(splitStrings[i+1]));
+		                file_fd=open("../cookie/host_cookie",O_CREAT | O_WRONLY);
+				{
+					write(file_fd,splitStrings[i+1],strlen(splitStrings[i+1]));
+					close(file_fd);
+				}
+			}
+                    }
+
+             }
+	}
+}
+
+bool peer_traversal(void *this_peer_info){
+	int found_server =0;
+	struct addrinfo hints,*serverinfo,*p;
+        unsigned char respBuff[1024]={0};
+        memset(respBuff, '0', sizeof(respBuff));
+	struct sockaddr_in serv_addr;
+	printf("---------- Peer values  start -------------\n");
+	printf("Peer IP :%s\n",(((peer_info*)this_peer_info)->hostname));
+        printf("peer port to download : %s\n",(((peer_info*)this_peer_info)->listen_port));
+ 	memset(&hints,0,sizeof(hints));
+        hints.ai_family = AF_INET;                      // Create IPv4 soscket
+        hints.ai_socktype = SOCK_STREAM;                // TCP socket
+
+        if ( getaddrinfo((((peer_info*)this_peer_info)->hostname),(((peer_info*)this_peer_info)->listen_port) , &hints, &serverinfo) != 0 )
+                printf("Failed  gettaddr info \n");
+
+        for(p = serverinfo; p != NULL; p = p->ai_next) {
+                if ((rfc_client_fd = socket(p->ai_family, p->ai_socktype,p->ai_protocol)) == -1) {
+                        perror("client: socket");
+                        continue;
+                }
+                if (connect(rfc_client_fd, p->ai_addr, p->ai_addrlen) == -1) {
+                        close(rfc_client_fd);
+                        perror("client: connect");
+                        continue;
+                }
+                found_server = 1;
+                break;
+        }
+        if ( found_server != 1)
+                return 1;
+
+	else{
+		send_rfc_get_query_msg();			
+	}	
+
+	printf("----------- Peer values  end ------------ \n");
+	printf("\n");
+	return TRUE;
+}
+
+void fetch_rfc_from_peer(){
+	printf("Get file once *****************************\n");		
+	list_for_each(&other_peers,peer_traversal);
+/*	printf("Get file the second time *****************************\n");		
+	
+	list_for_each(&other_peers,peer_traversal);
+*/
+}
+
+void handle_pquery_response(){
+	handle_generic_read();	
+	fetch_rfc_from_peer();
+	printf("Download complete.. Client is now closing\n");
+	close(rfc_client_fd);
+	return ;
+}
+//	TNRC: This function clears the Rfc index linklist entry 
+void free_rfc_index(void *this_RFC_index){
+/*
+        if(((RFC_index*)this_RFC_index)->RFC_title)
+                free(((RFC_index*)this_RFC_index)->RFC_title);
+        if(((RFC_index*)this_RFC_index)->hostname)
+                free(((RFC_index*)this_RFC_index)->hostname);
+*/
+        free((RFC_index*)this_RFC_index);
+}
+void free_other_peers(void *this_peer_info){
+/*
+        if(((peer_info*)this_peer_info)->RFC_title)
+                free(((peer_info*)this_peer_info)->RFC_title);
+        if(((peer_info*)this_peer_info)->hostname)
+                free(((peer_info*)this_peer_info)->hostname);
+*/
+        free((peer_info*)this_peer_info);
+}
+
+
+//	TNRC: This function prints data for each iterator function
+bool list_traversal(void *this_RFC_index){
+	printf("---------- Node values  start -------------\n");
+	printf("Rfc index:%d\n",(((RFC_index*)this_RFC_index)->RFC_num));
+        if(((RFC_index*)this_RFC_index)->RFC_title)
+                printf("Title : %s\n",(((RFC_index*)this_RFC_index)->RFC_title));
+        if(((RFC_index*)this_RFC_index)->hostname)
+                printf("Hostname : %s\n",(((RFC_index*)this_RFC_index)->hostname));
+
+	printf("----------- Node values  end ------------ \n");
+	printf("\n");
+	return TRUE;
+}
+
+int allocate_peer_struct(peer_info** my_info ){
+	if ( *my_info )
+		return 1;
+	*my_info = (peer_info *) malloc( sizeof(peer_info));
+	if ( ! my_info ) {
+		printf("Peer memory allocation failed\n");
+		return 1;
+	}
+	(*my_info)->cookie = -1 ;
+	memset(((*my_info)->hostname),0,sizeof(((*my_info)->hostname)));
+	RS_conn_fd = 0;
+	memset((*my_info)->listen_port,0,sizeof((*my_info)->listen_port));
+	return 0;
+	
+}
+
+int check_and_load_cookie(peer_info **my_info){
+	struct stat cookie_file_stat;
+	int file_desc = 0,cookie_val = -1;
+	FILE *fp =NULL;
+	file_desc = open(COOKIE_FILE, O_RDONLY);
+	if (fstat(file_desc, &cookie_file_stat)){
+		printf("No cookie file present of client 1\n");
+		return 1;
+	}
+	close(file_desc);
+	fp = fopen(COOKIE_FILE,"r");
+	if ( ! fp ) { 
+		printf("No cookie file present of client 2\n");
+		return 1;
+	}
+		
+	
+	fscanf(fp,"%d",&cookie_val);
+	printf("Setting cookie_val to %d\n",cookie_val);
+	(*my_info)->cookie = cookie_val;
+}
+
+int send_packet(peer_info *my_info, char *buffer,int flag ){
+//	printf("Inside sent packet functionality and trying to send buffer %s !\n",buffer);
+	int bytes_sent=-1;
+	if ( !flag )
+		bytes_sent = send(RS_conn_fd,buffer,strlen(buffer),0);	
+	else{
+//		printf("1\n");
+		bytes_sent = send(rfc_client_fd,buffer,strlen(buffer),0);
+//		printf("2\n");
+	}
+	if(bytes_sent != (strlen(buffer))){
+		printf("Peer couldnot send register request\n");
+		return 1;
+	}
+	printf("Bytes sent : %d\n",bytes_sent);
+	return 0;
+}
+
+void send_rfc_get_query_msg(){
+	char recv_buff[1024];
+	int msg_type = RFC_GET_QUERY; 
+	printf("Send RFC get query to PEER !\n");
+	int recv_bytes=0;
+	int send_len = 200;
+	char *buffer = (char*) malloc(200);
+	int file_fd;
+	int total_recv_in_packet=0,recv_size=0;
+	list foreign_rfc;
+	list_new(&foreign_rfc,sizeof(RFC_index),free_rfc_index);
+	char *rfc_ptr=NULL;
+	RFC_index this_rfc_entry;
+	int flag = 0;
+	char final_buffer[1000]={0};
+	char *rfc_content,*content_length,*end_of_tag;
+	int32_t actual_content_length=0,network_content_length=0; 
+	int data_started=0;
+  	bool result = TRUE;
+	int n=0;
+	
+	memset(buffer,0,send_len);
+	memset(recv_buff,0,sizeof(recv_buff));
+	snprintf(buffer,sizeof(buffer),"%d",msg_type);
+	
+	send_packet(my_info,buffer,1);
+
+        while( total_recv_in_packet < RFC_GET_QUERY_RESPONSE_HEADER) {
+            recv_bytes = read(rfc_client_fd, &(recv_buff[total_recv_in_packet]), RFC_GET_QUERY_RESPONSE_HEADER - total_recv_in_packet );
+	    if( recv_bytes  > 0 ){
+		    recv_buff[recv_bytes]=0;
+		    printf("Got RFC_GET_QUERY_RESPONSE_HEADER header bytes %d\n header %s\n",recv_bytes,recv_buff);
+		    // 20 = bytes in string contentlength: along with  4 bytes of integer length
+		    total_recv_in_packet=total_recv_in_packet + recv_bytes;
+		    if( total_recv_in_packet < RFC_GET_QUERY_RESPONSE_HEADER ){
+			printf("I might not have RFC Get Query message.. so continue reading\n");
+			continue;
+		    }
+		    break;
+	    }
+        }
+
+//	TNRC : This has payload .. write code to get all bytes here too
+	char *data = (char*)&network_content_length;
+	total_recv_in_packet=0;
+	while( total_recv_in_packet < 4 ){
+		recv_bytes = read(rfc_client_fd, data, 4 - total_recv_in_packet);
+		data=data + recv_bytes;
+		total_recv_in_packet=total_recv_in_packet+recv_bytes;
+		// 20 = bytes in string contentlength: along with  4 bytes of integer length
+		if(recv_bytes < 4){
+			printf("I might not have contentlenght.. so continue reading\n");
+		}
+		else
+			break;
+	}
+	actual_content_length=ntohl(network_content_length);
+	memset(recv_buff,0,sizeof(recv_buff));
+        total_recv_in_packet = 0;
+	while(total_recv_in_packet < actual_content_length)
+	{	
+		if( (recv_bytes = read(rfc_client_fd, &recv_buff[total_recv_in_packet], actual_content_length - total_recv_in_packet)) >0 )
+		{
+			recv_buff[recv_bytes]=0;
+			total_recv_in_packet = total_recv_in_packet + recv_bytes;
+//					printf("Writing to file part 1 %s\n",recv_buff);
+		}
+	}
+	
+//	while((recv_bytes = read(rfc_client_fd, recv_buff, sizeof(recv_buff)-1)) > 0)
+             //   printf("Got RFC query response string:%s\n",recv_buff);
+                // process packet and add clients to list
+			// Merge the local and global list to find diff 
+	printf("Got peer rfc numbers %s\n",recv_buff);
+	rfc_ptr=strtok(recv_buff," ");
+	while( rfc_ptr != NULL)
+	{
+		printf("Current rfc under consideration %s\n",rfc_ptr);
+		flag = 0;
+		memset(&this_rfc_entry,0,sizeof(this_rfc_entry));
+		this_rfc_entry.RFC_num=atoi(rfc_ptr);
+		linklist_node *node = rfc_index_list.head;
+		bool result=TRUE;
+		while(node != NULL && result) {
+			if( this_rfc_entry.RFC_num == ((RFC_index*)(node->data))->RFC_num){
+				flag=1;
+			}
+			node = node->next;
+		}
+	
+		if( flag == 0){
+			printf("RFC num %d is not present in my list.. will get this one\n",this_rfc_entry.RFC_num);
+			list_append(&foreign_rfc,(void *)&this_rfc_entry);
+		}
+		else{
+			printf("RFC num %d is already with me.. Skip downloading this one\n",this_rfc_entry.RFC_num);
+		}
+		rfc_ptr=strtok(NULL," ");
+        }
+	
+	int iteration=1;
+	linklist_node *f_node = foreign_rfc.head;
+	actual_content_length=0;
+	char local_filename[50]={0};
+	while(f_node != NULL && result) 
+	{
+		data_started=0;
+		memset(local_filename,0,sizeof(local_filename));
+		printf("iteration : %d\n",iteration);
+		iteration++;
+		printf("Rfc index:%d\n",(((RFC_index*)f_node->data)->RFC_num));
+		msg_type = GET_RFC_CONTENT; 
+		printf("Download RFC from peer PEER !\n");
+		memset(buffer,0,send_len);
+		snprintf(buffer,sizeof(buffer),"%d %d",msg_type,(((RFC_index*)f_node->data)->RFC_num));
+		snprintf(local_filename,sizeof(local_filename),"../rfc/%d.txt",(((RFC_index*)f_node->data)->RFC_num));
+		printf("Local file to write :%s and buffer to send %s\n",local_filename,buffer);	
+		send_packet(my_info,buffer,1);
+
+		memset(recv_buff,0,sizeof(recv_buff));
+		total_recv_in_packet=0;
+		// Get data until content length
+		while( total_recv_in_packet < RFC_DATA_HEADER ){
+			recv_bytes = read(rfc_client_fd, &recv_buff[total_recv_in_packet], RFC_DATA_HEADER - total_recv_in_packet);
+			recv_buff[recv_bytes]=0;
+			printf("Got header bytes %d\n header %s\n",recv_bytes,recv_buff);
+			// 20 = bytes in string contentlength: along with  4 bytes of integer length
+			total_recv_in_packet=total_recv_in_packet+recv_bytes;
+			if(recv_bytes < RFC_DATA_HEADER){
+				printf("I might not have contentlenght.. so continue reading\n");
+			}
+			else
+				break;
+		}
+		total_recv_in_packet=0;
+		char *data = (char*)&network_content_length;
+		while( total_recv_in_packet < 4 ){
+			recv_bytes = read(rfc_client_fd, data, 4 - total_recv_in_packet);
+			data=data + recv_bytes;
+			// 20 = bytes in string contentlength: along with  4 bytes of integer length
+			total_recv_in_packet=total_recv_in_packet+recv_bytes;
+			if(recv_bytes < 4){
+				printf("I might not have contentlenght.. so continue reading\n");
+			}
+			else
+				break;
+		}
+
+		actual_content_length=ntohl(network_content_length);
+
+		printf("I got content length : %d \n",actual_content_length);
+		printf("*************************** got my header .. geting my data *********************************\n");	
+		if( actual_content_length < 1023 )
+			recv_size = actual_content_length;
+		else
+			recv_size = 1023;
+		total_recv_in_packet=0;
+		memset(recv_buff,0,sizeof(recv_buff));
+		file_fd=open(local_filename,O_CREAT | O_WRONLY);
+		total_recv_in_packet = 0;
+		printf("here you go\n");
+		while(total_recv_in_packet < actual_content_length)
+		{	
+			recv_bytes = read(rfc_client_fd, recv_buff, recv_size);
+			if( recv_bytes > 0) 
+			{
+				recv_buff[recv_bytes]=0;
+				total_recv_in_packet = total_recv_in_packet + recv_bytes;
+				if( data_started==0)
+				{
+					if( (rfc_content=strstr(recv_buff,"data: ")) != NULL)
+					{
+						rfc_content=rfc_content+strlen("data: ");
+	//					printf("Writing to file part 1 %s\n",recv_buff);
+						write(file_fd,rfc_content,strlen(rfc_content));
+						data_started=1;
+					}
+				}
+				else{
+	//				printf("Writing to file part 2 %s\n",recv_buff);
+					write(file_fd,recv_buff,strlen(recv_buff));
+				}
+				if ( (actual_content_length - total_recv_in_packet) < 1023 )
+					recv_size = actual_content_length - total_recv_in_packet;
+				else
+					recv_size = 1023;
+				memset(recv_buff,0,sizeof(recv_buff));
+			}
+		}
+		list_append(&rfc_index_list,(void *)(((RFC_index*)f_node->data)));
+		close(file_fd);
+	//	list_destroy(&foreign_rfc);
+
+		f_node = f_node->next;
+	}
+	free(buffer);
+}
+
+
+int send_rs_register(peer_info *my_info){
+	int msg_type = REGISTER_REQUEST;
+	char message[20]="REGISTER_REQUEST";
+	char cookie[10]={0},*cookie_ptr;
+	cookie_ptr = NULL;
+	memset(app_header,0,sizeof(app_header));
+	snprintf(app_header,sizeof(app_header)," %s \r\n hostname: %s \r\n server_port: %s \r\n contentlength: %d \r\n",message,my_info->hostname,my_info->listen_port,0);
+	if (my_info->cookie != -1 ){
+		snprintf(&app_header[strlen(app_header)],sizeof(app_header)-strlen(app_header)," cookie: %s\r\n\r\n",cookie_ptr);
+	}
+	printf("My message header is \n%s\n",app_header);
+	int send_len = strlen(app_header)+1;
+	char *buffer = (char*) malloc(send_len);
+	memset(buffer,0,send_len);
+	memcpy(buffer,app_header,strlen(app_header)+1);
+/*
+	if ( my_info && my_info->cookie != - 1  ){
+		snprintf(buffer,send_len,"%d%d%s",msg_type,my_info->cookie,my_info->listen_port);
+	}
+	else{
+		snprintf(buffer,sizeof(buffer),"%d%s\n",msg_type,my_info->listen_port);
+	}
+*/
+	send_packet(my_info,buffer,0);
+	free(buffer);
+	return 0;
+}	
+
+int send_rs_keepalive_msg(peer_info *my_info){
+	int msg_type = KEEPALIVE_REQUEST; 
+	printf("Send KEEPALIVE_REQUEST from here\n");
+
+	char message[20]="KEEPALIVE_REQUEST";
+	char cookie[10]={0},*cookie_ptr;
+	cookie_ptr = NULL;
+	if (my_info->cookie != -1 ){
+		snprintf(cookie,sizeof(cookie),"%d",my_info->cookie);
+		cookie_ptr=(char*)&cookie;
+	}
+	memset(app_header,0,sizeof(app_header));
+	snprintf(app_header,sizeof(app_header)," %s \r\n hostname: %s \r\n contentlength: %d \r\n",message,my_info->hostname,0);
+	if(cookie){
+		snprintf(&app_header[strlen(app_header)],sizeof(app_header)-strlen(app_header)," cookie: %s \r\n\r\n",cookie_ptr);
+	}
+	printf("My message header is \n%s\n",app_header);
+	int send_len = strlen(app_header)+1;
+	char *buffer = (char*) malloc(send_len);
+	memset(buffer,0,send_len);
+	memcpy(buffer,app_header,strlen(app_header)+1);
+	send_packet(my_info,buffer,0);
+	free(buffer);
+	return 0;
+}
+
+int send_rs_pquery_msg(peer_info *my_info){
+	int msg_type = PQUERY_REQUEST; 
+	printf("Send PQUERY_REQUEST from here\n");
+	char message[20]="PQUERY_REQUEST";
+	char cookie[10]={0},*cookie_ptr;
+	cookie_ptr = NULL;
+	if (my_info->cookie != -1 ){
+		snprintf(cookie,sizeof(cookie),"%d",my_info->cookie);
+		cookie_ptr=(char*)&cookie;
+	}
+	memset(app_header,0,sizeof(app_header));
+	snprintf(app_header,sizeof(app_header)," %s \r\n hostname: %s \r\n contentlength: %d \r\n",message,my_info->hostname,0);
+	if(cookie){
+		snprintf(&app_header[strlen(app_header)],sizeof(app_header)-strlen(app_header)," cookie: %s \r\n\r\n",cookie_ptr);
+	}
+	printf("My message header is \n%s\n",app_header);
+	int send_len = strlen(app_header)+1;
+	char *buffer = (char*) malloc(send_len);
+	memset(buffer,0,send_len);
+	memcpy(buffer,app_header,strlen(app_header)+1);
+	send_packet(my_info,buffer,0);
+	free(buffer);
+	return 0;
+/*
+	int send_len = 11;
+	char *buffer = (char*) malloc(send_len);
+	memset(buffer,0,send_len);
+	snprintf(buffer,sizeof(buffer),"%d\n",msg_type);
+	send_packet(my_info,buffer,0);
+	free(buffer);
+	return 0;
+*/
+}
+
+int send_rs_leave_msg(peer_info *my_info){
+
+	int msg_type = LEAVE_REQUEST;
+	char message[20]="LEAVE_REQUEST";
+	char cookie[10]={0},*cookie_ptr;
+	cookie_ptr = NULL;
+	if (my_info->cookie != -1 ){
+		snprintf(cookie,sizeof(cookie),"%d",my_info->cookie);
+		cookie_ptr=(char*)&cookie;
+	}
+	memset(app_header,0,sizeof(app_header));
+	snprintf(app_header,sizeof(app_header)," %s \r\n hostname: %s \r\n server_port: %s \r\n contentlength: %d \r\n",message,my_info->hostname,my_info->listen_port,0);
+	if(cookie){
+		snprintf(&app_header[strlen(app_header)],sizeof(app_header)-strlen(app_header)," cookie: %s\r\n\r\n",cookie_ptr);
+	}
+	printf("My message header is \n%s\n",app_header);
+	int send_len = strlen(app_header)+1;
+	char *buffer = (char*) malloc(send_len);
+	memset(buffer,0,send_len);
+	memcpy(buffer,app_header,strlen(app_header)+1);
+/*
+	if ( my_info && my_info->cookie != - 1  ){
+		snprintf(buffer,send_len,"%d%d%s",msg_type,my_info->cookie,my_info->listen_port);
+	}
+	else{
+		snprintf(buffer,sizeof(buffer),"%d%s\n",msg_type,my_info->listen_port);
+	}
+*/
+	send_packet(my_info,buffer,0);
+	free(buffer);
+	return 0;
+
+
+/*
+	int msg_type = LEAVE_REQUEST; 
+	printf("Send %d  LEAVE_REQUEST\n", msg_type);
+	int send_len = 11;
+	char *buffer = (char*) malloc(send_len);
+	memset(buffer,0,send_len);
+	snprintf(buffer,sizeof(buffer),"%d\n",msg_type);
+	send_packet(my_info,buffer,0);
+	free(buffer);
+	return 0;
+*/
+}
+
+void handle_register_response(){
+	FILE *fp;
+	int *cookie=NULL;
+	handle_generic_read();
+	printf("Register response done\n");
+}
+
+int manage_rs_activity(peer_info *my_info,int message){
+
+	int regis_state,found_server=0;
+	struct addrinfo hints,*serverinfo,*p;
+	char ipaddress[INET_ADDRSTRLEN]={0};
+	memset(&hints,0,sizeof(hints));
+	hints.ai_family = AF_INET;			// Create IPv4 soscket
+	hints.ai_socktype = SOCK_STREAM;		// TCP socket
+
+	if ( getaddrinfo(RS_SERVER_IP, RS_SERVER_PORT, &hints, &serverinfo) != SUCCESS )
+		printf("Failed  gettaddr info on %s\n", RS_SERVER_IP);
+	
+	for(p = serverinfo; p != NULL; p = p->ai_next) {	
+		if ((RS_conn_fd = socket(p->ai_family, p->ai_socktype,p->ai_protocol)) == -1) {
+            		perror("client: socket");
+            		continue;
+		}
+		if (connect(RS_conn_fd, p->ai_addr, p->ai_addrlen) == -1) {
+			close(RS_conn_fd);
+			perror("client: connect");
+			continue;
+		}
+		found_server = 1;
+		break;
+        }
+
+	if ( found_server != 1 )
+		return FAILURE;
+	
+	if ( RS_conn_fd )
+	{
+		struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+		inet_ntop(AF_INET, &(ipv4->sin_addr), ipaddress, INET_ADDRSTRLEN);
+		printf("Sending %d to server on IP %s\n",message, ipaddress);
+		strncpy(my_info->hostname,ipaddress,strlen(ipaddress));
+		switch(message){
+			case REGISTER_REQUEST:
+				send_rs_register(my_info);
+				handle_register_response();
+				send_rs_pquery_msg(my_info);
+				handle_pquery_response();
+			break;
+			case KEEPALIVE_REQUEST:
+				send_rs_keepalive_msg(my_info);
+				break;
+			case LEAVE_REQUEST:
+				send_rs_leave_msg(my_info);	
+				break;
+/*
+			case PQUERY_REQUEST_REQUEST:
+		        send_rs_pquery_msg(my_info);
+			handle_pquery_response();
+			break;
+*/
+		}
+	} 
+	else{
+		printf("Could not create client socket for RS \n");
+		return FAILURE;
+	}
+}
+
+void create_local_rfc_index(list *my_rfc_index_list){
+	char line[600];
+        FILE *fp;
+        char title[200]={0},*curr_ptr;
+
+	DIR *directory;
+	struct dirent *dir;
+	directory = opendir("../rfc");
+	struct RFC_index dir_rfc_entry;
+	int temp_ctr=0;
+	int rfc_number=0;
+	char filename[20]={0};
+	char *itr,rfc_str_num[5];
+	memset(&dir_rfc_entry,0,sizeof(dir_rfc_entry));
+	if( directory ){
+		while(( dir = readdir(directory))!= NULL){
+			printf("Parse entry %s\n",(dir->d_name));
+			memset(filename,0,sizeof(filename));
+			memset(rfc_str_num,0,sizeof(rfc_str_num));
+			strcat(filename,"../rfc/");
+			printf("start filename %s\n",filename);
+			if(!(strncmp(dir->d_name,"..",strlen(".."))) || !(strncmp(dir->d_name,".",strlen(".")))){
+				continue;
+			}
+
+//			strncpy(dir_rfc_entry.RFC_title,dir->d_name,strlen(dir->d_name));	
+			strcat(filename,dir->d_name);
+			// rfc takes 3 chars.. number starts after this.
+			itr=&filename[7];
+			memcpy(rfc_str_num,itr,strlen(itr)-4);
+			rfc_number = atoi(rfc_str_num);
+			// get name of rfc 
+			printf("Opening file %s\n",filename);
+			fp=fopen(filename,"r");
+			if(fp == NULL){
+				continue;	
+			}
+			memset(line,0,sizeof(line));
+			memset(title,0,sizeof(title));
+			int count =0;
+			 while ( count !=6 ){
+				fgets(line, sizeof(line), fp);
+				count++;
+			}
+
+			while(fgets(line, sizeof(line), fp)){
+	//			printf("part 2 %s\n",title);
+				if(line[0] =='\n'){
+					break;
+				}
+			}
+			 while (fgets(line, sizeof(line), fp)){
+				if(line[0] !='\n'){
+					break;
+				}
+			}
+			char *ptr;
+			ptr=&line[0];
+			if( *ptr =='\t' || *ptr==' '){
+				while(*ptr =='\t' || *ptr==' '){
+					ptr++;
+				}
+				ptr--;
+			}
+			printf("part %s\n",ptr);
+		// Title starts here.. Check for beginning of abstract
+	//		printf("1 starting with data %s\n",ptr);
+			memcpy(&title[0],ptr,strlen(ptr));
+	//		printf("2\n");
+			curr_ptr=&title[strlen(title)];
+	//		printf("2.5 with start title %s\n",title);
+			while(fgets(line, sizeof(line), fp)){
+				if(line[0]=='\n'){
+					break;
+				}
+				title[strlen(title)-1] = ' ';
+				ptr=&line[0];
+			//	printf("current line is %s\n",line);
+				while(*ptr =='\t' || *ptr==' '){
+					ptr++;
+				}
+				memcpy(curr_ptr,ptr,strlen(ptr) - 1);
+				curr_ptr=&title[strlen(title)];
+			}
+			*curr_ptr='\0';
+			printf("Final title :%s\n", title);
+			fclose(fp);
+
+			memcpy(&(dir_rfc_entry.RFC_title),title,strlen(title)+1);	
+			printf("Title :%s\nrfc_number is %d\n",dir_rfc_entry.RFC_title,rfc_number);
+			dir_rfc_entry.RFC_num = rfc_number;
+			list_append(my_rfc_index_list,(void *)&dir_rfc_entry);
+		}
+		closedir(directory);
+	}
+	
+	if( dir )
+		free(dir);
+	
+}
+/*
+void schedule_keepalive(){
+	struct event_base *base = event_base_new();
+	struct event *ev1;
+        struct timeval five_seconds = {2,0};
+	ev1 = event_new(base, -1, EV_TIMEOUT|EV_PERSIST, send_rs_keepalive_msg,NULL);
+	event_add(ev1, &five_seconds);
+	event_base_dispatch(base);
+}
+*/
+
+
+int create_listen_socket(peer_info **my_info){
+    int ret =0;
+    socklen_t addrLen;
+    struct sockaddr_in serv_addr;
+    listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    memset(&serv_addr, '0', sizeof(serv_addr));
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serv_addr.sin_port = 0;
+
+    addrLen = sizeof(serv_addr);
+    int reuse = 1;
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+        perror("setsockopt(SO_REUSEADDR) failed");
+
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0) 
+        perror("setsockopt(SO_REUSEPORT) failed");
+    bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    ret = getsockname(listenfd,(struct sockaddr* )&serv_addr,&addrLen);
+    if( ret != -1){
+	    snprintf((*my_info)->listen_port,6,"%d",ntohs(serv_addr.sin_port));
+    	printf("I will be listening on port : %s\n",(*my_info)->listen_port);
+    }
+}
+void *peer_rfc_server(void *arg){
+	char rfc_file_name[20]={0};
+	char recv_buff[1024]={0};
+	unsigned char respBuff[1024]={0};
+	char temp_write_buffer[1024]={0};
+	char header[100]={0};
+	listen(listenfd, 10);
+	int recv_bytes=0;
+	int bytes_sent=0;
+	FILE *fp;
+	char* rfc_num_ptr=NULL;
+	struct stat buffer;
+	int status;
+	int32_t actual_content_length=0,network_content_length=0,endian_content_length=0; 
+	int receive_buffer_len=0,total_recv_in_packet=0;
+	bool result=TRUE;
+	int count=0;
+	int msg_type=0;
+	int *connfd_ptr=(int *)arg;
+	int connfd=*connfd_ptr;
+	printf("I will use connfd :%d\n",connfd);
+	memset(recv_buff,0,sizeof(recv_buff));
+	memset(respBuff,0,sizeof(respBuff));
+	total_recv_in_packet = 0;
+//			GET QUERY Header reception
+	while( total_recv_in_packet < RFC_GET_QUERY_HEADER ){
+            recv_bytes = read(connfd, &(recv_buff[total_recv_in_packet]), RFC_GET_QUERY_HEADER - total_recv_in_packet );
+	    if(recv_bytes > 0 ){
+		    recv_buff[recv_bytes]=0;
+		    printf("Got RFC_GET_QUEY_HEADER header bytes %d\n header %s\n",recv_bytes,recv_buff);
+		    // 20 = bytes in string contentlength: along with  4 bytes of integer length
+		    total_recv_in_packet=total_recv_in_packet+recv_bytes;
+		    if( total_recv_in_packet < RFC_GET_QUERY_HEADER){
+			printf("I might not have RFC Get Query message.. so continue reading\n");
+		    }
+	    }
+	    else if(recv_bytes == 0){
+		printf("Socket has closed .. Thread saying bye\n");
+		return (void*)1;
+	    }
+        }
+
+       // while ( (recv_bytes = read(connfd, recv_buff, sizeof(recv_buff)-1)) > 0)
+        printf(" I have fixed get query header... Got string %s\n",recv_buff);
+	if ( recv_buff[0] == 56)
+	{
+	    printf("I have to service a rfc get query response from my following list\n");
+
+	    list_for_each(&rfc_index_list,list_traversal);
+	    linklist_node *node = rfc_index_list.head;
+	    while(node != NULL && result) {
+		snprintf(&respBuff[strlen(respBuff)],sizeof(respBuff),"%d ",((RFC_index*)(node->data))->RFC_num);
+		count++;
+		node=node->next;
+	    }
+	    respBuff[strlen(respBuff)-1]='\0';	
+
+	    // SEND MSG HEADER
+	    msg_type=RFC_GET_QUERY_RESPONSE;
+	    snprintf(header,sizeof(header),"%d",msg_type);
+	    printf("Sending RFC_GET_QUERY_RESPONSE header buffer  %s\n",header);
+	    bytes_sent = send(connfd,header,strlen(header),0);
+	    if(bytes_sent == -1 ){
+		printf("Socket has closed .. Thread saying bye\n");
+		return (void*)1;
+	    }
+		
+	    // SEND CONTENT_LENGTH
+	    endian_content_length = strlen(respBuff) + 1;	
+	    actual_content_length = htonl(endian_content_length);
+	    printf("%x and %x\n",actual_content_length,endian_content_length);	
+	    bytes_sent = send(connfd,&actual_content_length,sizeof(actual_content_length),0);
+	    if(bytes_sent == -1 ){
+		printf("Socket has closed .. Thread saying bye\n");
+		return (void*)1;
+	    }
+
+	    // SEND DATA
+	    printf("Got sending buffer.. sending it back to client %s\n",respBuff);
+	    bytes_sent = send(connfd,respBuff,strlen(respBuff)+1,0);
+	    if(bytes_sent == -1 ){
+		printf("Socket has closed .. Thread saying bye\n");
+		return (void*)1;
+	    }
+
+	    while(1){
+		    memset(recv_buff,0,sizeof(recv_buff));
+		    memset(respBuff,0,sizeof(respBuff));
+		    total_recv_in_packet = 0;
+		    while( total_recv_in_packet < RFC_GET_CONTENT_HEADER ){
+			recv_bytes = read(connfd, &(recv_buff[total_recv_in_packet]), RFC_GET_CONTENT_HEADER - total_recv_in_packet );
+			if( recv_bytes > 0){
+				recv_buff[recv_bytes]=0;
+				printf("Got RFC_GET_CONTENT_HEADER header bytes %d\n header %s\n",recv_bytes,recv_buff);
+				total_recv_in_packet=total_recv_in_packet+recv_bytes;
+				// 20 = bytes in string contentlength: along with  4 bytes of integer length
+				if(total_recv_in_packet < RFC_GET_CONTENT_HEADER){
+					printf("I might not have RFC Get Query message.. so continue reading\n");
+				}
+			}
+			else if(recv_bytes == 0){
+				printf("Socket has closed .. Thread saying bye\n");
+				return (void*)1;
+			}
+		    }
+	//	TNRC:	This wil have payload in it... Check length of string and write everything into buffer
+		// ADD hash define correct minimum value
+		/*
+		    char *data = (char*)&network_content_length;
+		    total_recv_in_packet=0;
+		    while( total_recv_in_packet < 4 ){
+			recv_bytes = read(rfc_client_fd, data, 4 - total_recv_in_packet);
+			data=data + recv_bytes;
+			// 20 = bytes in string contentlength: along with  4 bytes of integer length
+			if(recv_bytes < 4){
+				printf("I might not have contentlenght.. so continue reading\n");
+				total_recv_in_packet=total_recv_in_packet+recv_bytes;
+			}
+			else
+				break;
+		    }
+		    actual_content_length=ntohl(network_content_length);
+		    memset(recv_buff,0,sizeof(recv_buff));
+		    total_recv_in_packet = 0;
+		    while(total_recv_in_packet < actual_content_length){	
+			if( (recv_bytes = read(rfc_client_fd, &recv_buff[total_recv_in_packet], actual_content_length - total_recv_in_packet)) >0 )
+			{
+				recv_buff[recv_bytes]=0;
+				total_recv_in_packet = total_recv_in_packet + recv_bytes;
+			}
+		    }
+	*/
+	
+
+//	    while ( (recv_bytes = read(connfd, recv_buff, sizeof(recv_buff)-1)) > 0)
+		    printf("Client is requesting RFC %s\n",recv_buff+3);
+		    if ( recv_buff[0] == 58 || !(strncmp(recv_buff,"10",2)))
+		    {
+			printf(" !!!!!!!! SEND RFC now !!!!!!!!! \n");
+			rfc_num_ptr=&recv_buff[3];
+			printf("Current RFC to open : %s\n",rfc_num_ptr);
+			status=-1;
+			msg_type = RFC_GET_QUERY; 
+			memset(&buffer,0,sizeof(buffer));	
+			memset(&rfc_file_name,0,sizeof(rfc_file_name));	
+			snprintf(rfc_file_name,sizeof(rfc_file_name),"../rfc/%s.txt",rfc_num_ptr);	
+			status = stat(rfc_file_name, &buffer);
+			if(status == 0) {
+				printf("Size is %d\n",(int)buffer.st_size);
+				endian_content_length = buffer.st_size+strlen("data: ");	
+				actual_content_length = htonl(endian_content_length);
+			  // size of file is in member buffer.st_size;
+			}
+			else{
+				printf("Stat failed ... breaking\n");
+			}
+			fp = fopen(rfc_file_name,"r");
+			if(fp == NULL ){
+				perror("File open:\n");
+				break;
+			}
+			memset(respBuff,0,sizeof(respBuff));
+			strncpy(respBuff,"contentlength: ",strlen("contentlength: "));
+			bytes_sent = send(connfd,respBuff,strlen(respBuff),0);
+			    if(bytes_sent == -1 ){
+				printf("Socket has closed .. Thread saying bye\n");
+				return (void*)1;
+			    }
+			printf("Sent initially %s with recv_bytes %d\n",respBuff,bytes_sent);
+
+			printf("%x and %x\n",actual_content_length,endian_content_length);	
+			bytes_sent = send(connfd,&actual_content_length,sizeof(actual_content_length),0);
+			printf("Sent content length recv_bytes %d\n",bytes_sent);
+			    if(bytes_sent == -1 ){
+				printf("Socket has closed .. Thread saying bye\n");
+				return (void*)1;
+			    }
+
+			memset(respBuff,0,sizeof(respBuff));
+			memcpy(&respBuff[strlen(respBuff)],"data: ",strlen("data: "));
+			printf("\n");
+			receive_buffer_len= sizeof(temp_write_buffer)-strlen(respBuff);
+			while(fgets(temp_write_buffer,receive_buffer_len,fp) != NULL){
+		//		printf("File line is %s\n",temp_write_buffer);	
+				memcpy(&respBuff[strlen(respBuff)],temp_write_buffer,strlen(temp_write_buffer));
+	//			printf("I will be send respBuff %s\n",respBuff);	
+				bytes_sent = send(connfd,respBuff,strlen(respBuff),0);
+				    if(bytes_sent == -1 ){
+					printf("Socket has closed .. Thread saying bye\n");
+					return (void*)1;
+				    }
+		//		printf("Sent : %d bytes to server\n",bytes_sent);  
+				receive_buffer_len=sizeof(temp_write_buffer);
+				memset(respBuff,0,sizeof(respBuff));    
+				memset(temp_write_buffer,0,sizeof(temp_write_buffer));    
+			}
+			fclose(fp);
+		    } 
+    		}
+	}
+}
+
+
+void *rfc_server(){
+    int connfd[100]={0};
+    listen(listenfd, 10);
+    pthread_t peer_rfc_uploader[100];
+    memset(peer_rfc_uploader,0,sizeof(peer_rfc_uploader));
+    int i=0;
+    while(1)
+    {
+///			RFC SERVER will accept new connection here from other PEERS	
+        connfd[i] = accept(listenfd, (struct sockaddr*)NULL, NULL);
+        printf("Got connction.. spawn a new thread no %d for our friend\n",i);
+	pthread_create(&peer_rfc_uploader[i],NULL,peer_rfc_server,(void *)&connfd[i]);
+	i++;
+    }
+}
+
+
+int main(){
+	fd_set master;
+	int fd_max,retval; 
+	struct timeval tv;
+	pthread_t rfc_listener;
+	tv.tv_usec = 0;
+	tv.tv_sec = KEEPALIVE_TIMER;
+		
+	allocate_peer_struct(&my_info);
+
+	create_listen_socket(&my_info);
+	
+//	TNRC : Declare a new list here
+//	TNRC : Initialize the list with its correct node size and free function.. Note add will be done by Memcpy so no code required there
+	list_new(&rfc_index_list,sizeof(RFC_index),free_rfc_index);
+	list_new(&other_peers,sizeof(peer_info),free_other_peers);
+	check_and_load_cookie(&my_info);
+	printf("Create list of RFC's\n");
+	create_local_rfc_index(&rfc_index_list);
+	list_for_each(&rfc_index_list,list_traversal);
+
+// 	Until client is registered with RS , no way for other Peers to be served
+	while ( manage_rs_activity(my_info,REGISTER_REQUEST) != SUCCESS ){
+		printf("Peer cant connect to RS server... Will try again in 1 sec\n");
+		sleep(1);
+	}
+
+	FD_ZERO(&master);
+//	FD_SET(my_info->rfc_server_fd, &master);
+//	fd_max = my_info->rfc_server_fd;
+	FD_SET(RS_conn_fd, &master);
+//	if(RS_conn_fd > my_info->rfc_server_fd)
+	fd_max = RS_conn_fd;
+	pthread_create(&rfc_listener,NULL,rfc_server,NULL);
+
+	printf("FD's are : %d and max is %d\n",RS_conn_fd,fd_max + 1);	
+	if(signal(SIGINT,sig_handler) == SIG_ERR){
+		printf("Cant register SIGTERM\n");
+	}
+//	handle_pquery_response();
+//	send_rs_pquery_msg(my_info);
+/*
+	while(1){
+		FD_ZERO(&master);
+		FD_SET(RS_conn_fd, &master);
+		retval = select(fd_max+1,&master,NULL,NULL,&tv);
+		if (retval == -1){
+		        printf("Socket must have closed... Connection will just wait in loop now\n");	
+			break;
+		}
+		else if (retval){
+	//		printf("Select returned  : %d\n",retval);
+	//	    if(FD_ISSET(my_info->rfc_server_fd,&master)){
+	//	    	printf("Data is available now from other clients\n");
+			// Accept new connection .. and add in current fds set;
+			// Ask send to work in parallel or as accept to work in parallel too? 
+	//	    }
+        	    if(FD_ISSET(RS_conn_fd,&master)){
+		    	//printf("Data is available now from RS server\n");
+			// Handle response query from RS server.
+			handle_pquery_response();
+		    }
+		}
+		else {
+			// Do idle work
+        		//printf("No data within %d seconds.\n",KEEPALIVE_TIMER);
+			manage_rs_activity(my_info,KEEPALIVE_REQUEST);
+//			send_rs_keepalive_msg();
+			tv.tv_usec = 0;
+			tv.tv_sec = KEEPALIVE_TIMER;
+		}
+	}
+
+//	printf("Killing the child\n");
+*/	
+	pthread_join(rfc_listener,NULL);
+	return 0;
+}
+/*
+void *keepalive_entry_point( void *arg ){
+	peer_info *my_info = (peer_info*)arg;
+	schedule_keepalive();
+}
+*/
